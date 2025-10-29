@@ -9,8 +9,8 @@ Below is the **augmented WO index** (what gets included where), plus **three com
 * **WO-03 Π Present:** rank-view with **union-of-inputs frequency** tie-break; D8; idempotence (DEBUG off by default). ✅ COMPLETE
 * **WO-04 QtSpec:** residues cap=10 (include divisors), radii=(1,2[,3]), diagonals on; deterministic sort. ✅ COMPLETE
 * **WO-05 Qt classes:** **stable class keys** (bytes), WL channel separation, `int32` before bytes view, deterministic pack order. ✅ COMPLETE
-* **WO-06 Δ Shape law:** **IDENTITY, BLOW_UP(kh,kw)** and (when applicable) **FRAME(t), TILING(kh,kw)** with **deterministic tie-break** (prefer BLOW_UP; optional periodicity check remains input-only).
-* **WO-07 Bt Boundary:** force-until-forced; refinement ladder **S0..S6** (residue extend, r=3, WL=4, **distance-to-border**, **component centroid parity / scan index**, WL=5); keys by bytes.
+* **WO-06 Δ Shape law:** **IDENTITY, BLOW_UP(kh,kw)** and (when applicable) **FRAME(t), TILING(kh,kw)** with **deterministic tie-break** (prefer BLOW_UP; optional periodicity check remains input-only). ✅ COMPLETE
+* **WO-07 Bt Boundary:** force-until-forced; refinement ladder **S0..S6** (residue extend, r=3, WL=4, **distance-to-border**, **component centroid parity / scan index**, WL=5); keys by bytes. ✅ COMPLETE
 * **WO-08 Φ Writer:** one-stroke; **identity-guard** and **blow-up Bt-empty guard** (input-only color); **FRAME** border color rule; **TILING** by tiling identity-painted patch; no palette search; no multi-stroke.
 * **WO-09 Solver:** Π → QtSpec → Δ → Bt → Φ → un-Π; Δ from **original** sizes; deterministic, no prints.
 * **WO-10 Notebook:** inline/import and emit `submission.csv` with pipe toggle.
