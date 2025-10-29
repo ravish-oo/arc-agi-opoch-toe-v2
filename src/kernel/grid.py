@@ -34,6 +34,14 @@ def dims(g: Grid) -> Tuple[int, int]:
     return int(h), int(w)
 
 
+def divisors(n: int, max_div: int = 10) -> List[int]:
+    """
+    Return list of divisors of n in range [2, max_div], ascending order.
+    Used for computing residue moduli from grid dimensions.
+    """
+    return [d for d in range(2, min(n + 1, max_div + 1)) if n % d == 0]
+
+
 # ========== D8 group (pose operations) ==========
 
 def d8_apply(g: Grid, t: int) -> Grid:
