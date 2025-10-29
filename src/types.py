@@ -78,7 +78,8 @@ class Boundary:
 class ShapeLawKind(Enum):
     IDENTITY = auto()
     BLOW_UP = auto()   # rectangular allowed (kh, kw)
-    # (Optional future: TILING, FRAME, etc.)
+    FRAME = auto()     # add border (kh=kw=t for thickness t)
+    TILING = auto()    # periodic copy (kh, kw factors)
 
 @dataclass(frozen=True)
 class ShapeLaw:
