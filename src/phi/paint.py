@@ -127,22 +127,27 @@ def paint_phi(
     # Step 2: Build per-local-id color map with guards
     col_of_local = _build_color_map(x, cls, bt)
 
-    # Step 3: Paint based on Δ
+    # Step 3: Paint based on Δ (canvas size) and writer mode (from training)
     if delta.kind == ShapeLawKind.IDENTITY:
         return _paint_identity(x, cls, col_of_local)
 
-    elif delta.kind == ShapeLawKind.BLOW_UP:
-        return _paint_blowup(x, cls, col_of_local, delta.kh, delta.kw)
+    # Size-changed canvas: choose writer by training-selected flag
+    if delta.kind == ShapeLawKind.BLOW_UP:
+        if enable_tiling:
+            return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw)
+        else:
+            return _paint_blowup(x, cls, col_of_local, delta.kh, delta.kw)
 
-    elif delta.kind == ShapeLawKind.FRAME and enable_frame:
+    # Optional frame (unchanged)
+    if delta.kind == ShapeLawKind.FRAME and enable_frame:
         return _paint_frame(x, cls, col_of_local, delta.kh)  # t stored in kh
 
-    elif delta.kind == ShapeLawKind.TILING and enable_tiling:
+    # Optional explicit TILING-kind path (if ever emitted from Δ)
+    if delta.kind == ShapeLawKind.TILING and enable_tiling:
         return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw)
 
-    else:
-        # Fallback to identity if flags not enabled
-        return _paint_identity(x, cls, col_of_local)
+    # Conservative fallback
+    return _paint_identity(x, cls, col_of_local)
 
 
 def _paint_identity(x: Grid, cls, col_of_local: Dict[int, np.int8]) -> Grid:
