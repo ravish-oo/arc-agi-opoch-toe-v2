@@ -22,7 +22,7 @@ sys.path.insert(0, str(repo_root))
 from src.types import Task, Grid, ShapeLawKind
 from src.solver.run_task import solve_task
 from src.solver.shape_law import infer_shape_law
-from src.present.pi import canonize_task
+from src.present.pi import canonize_inputs
 from src.qt.spec import build_qt_spec
 from src.bt.boundary import extract_bt_force_until_forced, probe_writer_mode
 from src.qt.quotient import classes_for
@@ -112,11 +112,10 @@ def audit_task(task_id, task_obj, ground_truth):
         delta = infer_shape_law(task.train, enable_tiling=True, enable_frame=True)
         result['delta_kind'] = delta.kind.name
 
-        # Step 2: Π task-level
+        # Step 2: Π train
         train_Xs = [x for x, _ in task.train]
-        c_train, c_test, union_order = canonize_task(train_Xs, task.test)
+        c_train = canonize_inputs(train_Xs)
         result['train_transforms'] = [meta.transform_id for meta in c_train.metas]
-        result['test_transforms'] = [meta.transform_id for meta in c_test.metas]
 
         # Step 3: Qt spec
         spec0 = build_qt_spec(c_train.grids)
@@ -150,7 +149,9 @@ def audit_task(task_id, task_obj, ground_truth):
 
         result['forced_count'] = len(bt.forced_color)
 
-        # Step 5: Compute hit rate on test
+        # Step 5: Π test and compute hit rate
+        c_test = canonize_inputs(task.test)
+        result['test_transforms'] = [meta.transform_id for meta in c_test.metas]
 
         # Check transform variation
         train_set = set(result['train_transforms'])
