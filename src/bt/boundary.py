@@ -141,15 +141,41 @@ def check_boundary_forced(
                             color = int(Y[R, C])
                             bucket[key].add(color)
             elif writer_mode == 'tiling':
-                # TILING: (r,c) = (R%h, C%w)
-                for R in range(H):
-                    for C in range(W):
-                        r = R % h
-                        c = C % w
-                        local_id = int(cls.ids[r, c])
-                        key = cls.key_for[local_id]
-                        color = int(Y[R, C])
-                        bucket[key].add(color)
+                # TILING: pane-aware learning (only from ON panes)
+                # Build ON/OFF mask for each pane
+                kh, kw = delta.kh, delta.kw
+                pane_mask = np.zeros((kh, kw), dtype=bool)
+
+                for pr in range(kh):
+                    for pc in range(kw):
+                        pane = Y[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
+
+                        # ON pane: pane equals input motif exactly
+                        is_on = np.array_equal(pane, X)
+
+                        # OFF pane: all zeros (ignore these)
+                        is_off = np.all(pane == 0)
+
+                        # Only mark as ON if it matches motif
+                        # Skip ambiguous panes (neither exact match nor all zeros)
+                        if is_on:
+                            pane_mask[pr, pc] = True
+
+                # Only bucket from ON panes
+                for pr in range(kh):
+                    for pc in range(kw):
+                        if not pane_mask[pr, pc]:
+                            continue  # Skip OFF panes
+
+                        # Bucket from this ON pane
+                        for r in range(h):
+                            for c in range(w):
+                                R = pr * h + r
+                                C = pc * w + c
+                                local_id = int(cls.ids[r, c])
+                                key = cls.key_for[local_id]
+                                color = int(Y[R, C])
+                                bucket[key].add(color)
 
     # Build forced and unforced maps
     forced_color: Dict[bytes, int] = {}
