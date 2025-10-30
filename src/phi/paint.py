@@ -5,6 +5,7 @@ import numpy as np
 from ..types import Grid, Boundary, QtSpec, ShapeLaw, ShapeLawKind, CanonMeta
 from ..qt.quotient import classes_for
 from ..present.pi import uncanonize
+from ..bt.boundary import apply_pane_transform, inverse_pane_coords
 
 
 def select_size_writer(
@@ -101,7 +102,8 @@ def paint_phi(
     delta: ShapeLaw,        # Δ: IDENTITY / BLOW_UP(kh,kw) / FRAME / TILING
     *,
     enable_frame: bool = False,
-    enable_tiling: bool = False
+    enable_tiling: bool = False,
+    tiling_policy: str = 'uniform'
 ) -> Grid:
     """
     Deterministic, Δ-aware, one-stroke painting.
@@ -115,6 +117,7 @@ def paint_phi(
 
     TILING:
       - if enabled and delta.kind == TILING: build identity-painted patch Z, then tile to canvas
+      - tiling_policy controls per-pane transforms (uniform, row_FH, col_FH, checker_FH)
 
     Returns:
       Output grid as np.int8, C-contiguous
@@ -134,7 +137,7 @@ def paint_phi(
     # Size-changed canvas: choose writer by training-selected flag
     if delta.kind == ShapeLawKind.BLOW_UP:
         if enable_tiling:
-            return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw)
+            return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw, tiling_policy)
         else:
             return _paint_blowup(x, cls, col_of_local, delta.kh, delta.kw)
 
@@ -144,7 +147,7 @@ def paint_phi(
 
     # Optional explicit TILING-kind path (if ever emitted from Δ)
     if delta.kind == ShapeLawKind.TILING and enable_tiling:
-        return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw)
+        return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw, tiling_policy)
 
     # Conservative fallback
     return _paint_identity(x, cls, col_of_local)
@@ -221,11 +224,11 @@ def _paint_frame(x: Grid, cls, col_of_local: Dict[int, np.int8], t: int) -> Grid
     return np.ascontiguousarray(out)
 
 
-def _paint_tiling_internal(x: Grid, spec: QtSpec, bt: Boundary, kh: int, kw: int) -> Grid:
+def _paint_tiling_internal(x: Grid, spec: QtSpec, bt: Boundary, kh: int, kw: int, tiling_policy: str = 'uniform') -> Grid:
     """Internal: Paint TILING case with full setup."""
     cls = classes_for(x, spec)
     col_of_local = _build_color_map(x, cls, bt)
-    return _paint_tiling(x, cls, col_of_local, bt, kh, kw)
+    return _paint_tiling(x, cls, col_of_local, bt, kh, kw, tiling_policy)
 
 
 def _paint_tiling(
@@ -234,17 +237,19 @@ def _paint_tiling(
     col_of_local: Dict[int, np.int8],
     bt: Boundary,
     kh: int,
-    kw: int
+    kw: int,
+    tiling_policy: str = 'uniform'
 ) -> Grid:
     """
-    Paint TILING case: selective stamping based on input classes.
+    Paint TILING case: selective stamping with per-pane transforms.
 
     For each pane (pr, pc):
       - Map to input anchor via modulo: ar = pr % h, ac = pc % w
       - Derive "used color" same as Φ does: ρ(key) if forced, else input color
       - Place identity patch Z in pane iff used != 0
+      - Apply forward transform based on tiling_policy
 
-    This is input-only + Bt, no target peeking, and handles selective tiling.
+    This is input-only + Bt, no target peeking, and handles selective tiling with transforms.
     """
     h, w = x.shape
     H, W = h * kh, w * kw
@@ -265,11 +270,13 @@ def _paint_tiling(
             used = forced if forced is not None else int(x[ar, ac])
             mask[pr, pc] = (used != 0)  # Selective stamping
 
-    # Step 3: Tile Z selectively
+    # Step 3: Tile Z selectively with per-pane transforms
     out = np.zeros((H, W), dtype=np.int8)
     for pr in range(kh):
         for pc in range(kw):
             if mask[pr, pc]:
-                out[pr*h:(pr+1)*h, pc*w:(pc+1)*w] = Z
+                # Apply forward transform to Z before stamping
+                Z_transformed = apply_pane_transform(Z, pr, pc, tiling_policy)
+                out[pr*h:(pr+1)*h, pc*w:(pc+1)*w] = Z_transformed
 
     return np.ascontiguousarray(out)

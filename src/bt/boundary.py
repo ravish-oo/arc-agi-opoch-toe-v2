@@ -8,6 +8,110 @@ from ..qt.quotient import classes_for, _ExtraFlags
 from ..qt.spec import MAX_RESIDUES
 
 
+def apply_pane_transform(grid: Grid, pr: int, pc: int, policy: str) -> Grid:
+    """
+    Apply pane transform based on policy.
+
+    Policies:
+    - 'uniform': no transform
+    - 'row_FH': horizontal flip on odd pane rows (pr % 2 == 1)
+    - 'col_FH': horizontal flip on odd pane cols (pc % 2 == 1)
+    - 'checker_FH': horizontal flip when (pr + pc) % 2 == 1
+    """
+    if policy == 'uniform':
+        return grid
+    elif policy == 'row_FH':
+        if pr % 2 == 1:
+            return np.fliplr(grid)
+        return grid
+    elif policy == 'col_FH':
+        if pc % 2 == 1:
+            return np.fliplr(grid)
+        return grid
+    elif policy == 'checker_FH':
+        if (pr + pc) % 2 == 1:
+            return np.fliplr(grid)
+        return grid
+    else:
+        return grid
+
+
+def inverse_pane_coords(r: int, c: int, w: int, pr: int, pc: int, policy: str) -> Tuple[int, int]:
+    """
+    Apply inverse transform to coordinates within a pane.
+
+    Returns source coordinates (r', c') in the original motif.
+    """
+    if policy == 'uniform':
+        return r, c
+    elif policy == 'row_FH':
+        if pr % 2 == 1:
+            return r, w - 1 - c
+        return r, c
+    elif policy == 'col_FH':
+        if pc % 2 == 1:
+            return r, w - 1 - c
+        return r, c
+    elif policy == 'checker_FH':
+        if (pr + pc) % 2 == 1:
+            return r, w - 1 - c
+        return r, c
+    else:
+        return r, c
+
+
+def select_tiling_policy(
+    canon_train_pairs: List[Tuple[Grid, Grid]],  # (X_canon, Y_canon)
+    delta: ShapeLaw
+) -> str:
+    """
+    Select tiling policy by testing candidates on training pairs.
+
+    Returns policy ∈ {'uniform', 'row_FH', 'col_FH', 'checker_FH'}
+
+    Deterministic: picks policy with minimum mismatch across all train pairs.
+    """
+    if delta.kind != ShapeLawKind.BLOW_UP:
+        return 'uniform'
+
+    kh, kw = delta.kh, delta.kw
+    policies = ['uniform', 'row_FH', 'col_FH', 'checker_FH']
+    policy_mismatches = {p: 0 for p in policies}
+
+    for cx, cy in canon_train_pairs:
+        h, w = cx.shape
+        H, W = cy.shape
+
+        # Skip if not size-changed
+        if (h, w) == (H, W):
+            continue
+
+        for policy in policies:
+            # Test this policy
+            for pr in range(kh):
+                for pc in range(kw):
+                    pane = cy[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
+
+                    # Apply transform to input
+                    transformed_input = apply_pane_transform(cx, pr, pc, policy)
+
+                    # Check if pane matches transformed input
+                    is_on = np.array_equal(pane, transformed_input)
+                    is_off = np.all(pane == 0)
+
+                    if is_on or is_off:
+                        # Good match, no mismatch
+                        pass
+                    else:
+                        # Count mismatches
+                        if not is_off:
+                            policy_mismatches[policy] += np.sum(pane != transformed_input)
+
+    # Pick policy with minimum mismatch (tie-break: uniform)
+    best_policy = min(policies, key=lambda p: (policy_mismatches[p], policies.index(p)))
+    return best_policy
+
+
 def probe_writer_mode(
     canon_train_pairs: List[Tuple[Grid, Grid]],  # (X_canon, Y_canon)
     delta: ShapeLaw
@@ -81,6 +185,7 @@ def check_boundary_forced(
     spec: QtSpec,
     delta: ShapeLaw,
     writer_mode: str,
+    tiling_policy: str = 'uniform',
     extra: _ExtraFlags | None = None,
 ) -> Tuple[Boundary, bool]:
     """
@@ -141,7 +246,7 @@ def check_boundary_forced(
                             color = int(Y[R, C])
                             bucket[key].add(color)
             elif writer_mode == 'tiling':
-                # TILING: pane-aware learning (only from ON panes)
+                # TILING: pane-aware learning with policy transform (only from ON panes)
                 # Build ON/OFF mask for each pane
                 kh, kw = delta.kh, delta.kw
                 pane_mask = np.zeros((kh, kw), dtype=bool)
@@ -150,13 +255,16 @@ def check_boundary_forced(
                     for pc in range(kw):
                         pane = Y[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
 
-                        # ON pane: pane equals input motif exactly
-                        is_on = np.array_equal(pane, X)
+                        # Apply pane transform to input
+                        transformed_input = apply_pane_transform(X, pr, pc, tiling_policy)
+
+                        # ON pane: pane equals transformed input motif
+                        is_on = np.array_equal(pane, transformed_input)
 
                         # OFF pane: all zeros (ignore these)
                         is_off = np.all(pane == 0)
 
-                        # Only mark as ON if it matches motif
+                        # Only mark as ON if it matches transformed motif
                         # Skip ambiguous panes (neither exact match nor all zeros)
                         if is_on:
                             pane_mask[pr, pc] = True
@@ -167,12 +275,16 @@ def check_boundary_forced(
                         if not pane_mask[pr, pc]:
                             continue  # Skip OFF panes
 
-                        # Bucket from this ON pane
+                        # Bucket from this ON pane with inverse transform
                         for r in range(h):
                             for c in range(w):
                                 R = pr * h + r
                                 C = pc * w + c
-                                local_id = int(cls.ids[r, c])
+
+                                # Apply inverse transform to get source coords in motif
+                                r_src, c_src = inverse_pane_coords(r, c, w, pr, pc, tiling_policy)
+
+                                local_id = int(cls.ids[r_src, c_src])
                                 key = cls.key_for[local_id]
                                 color = int(Y[R, C])
                                 bucket[key].add(color)
@@ -200,6 +312,7 @@ def extract_bt_force_until_forced(
     initial_spec: QtSpec,
     delta: ShapeLaw,
     writer_mode: str,
+    tiling_policy: str = 'uniform',
 ) -> Tuple[Boundary, QtSpec, _ExtraFlags]:
     """
     Deterministic refinement ladder S0..S6 with Δ-aware pullback.
@@ -223,7 +336,7 @@ def extract_bt_force_until_forced(
     extra = _ExtraFlags()
 
     # S0: Base spec (from WO-04)
-    bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+    bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
     if all_forced:
         return bt, spec, extra
 
@@ -250,7 +363,7 @@ def extract_bt_force_until_forced(
             use_diagonals=spec.use_diagonals,
             wl_rounds=spec.wl_rounds
         )
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
@@ -262,7 +375,7 @@ def extract_bt_force_until_forced(
             use_diagonals=spec.use_diagonals,
             wl_rounds=spec.wl_rounds
         )
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
@@ -274,21 +387,21 @@ def extract_bt_force_until_forced(
             use_diagonals=spec.use_diagonals,
             wl_rounds=4
         )
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
     # S4: Add distance-to-border channel (input-only)
     if not extra.use_border_distance:
         extra.use_border_distance = True
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
     # S5a: Component centroid parity
     if not extra.use_centroid_parity and not extra.use_component_scan_index:
         extra.use_centroid_parity = True
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
@@ -296,7 +409,7 @@ def extract_bt_force_until_forced(
     if not all_forced:
         extra.use_centroid_parity = False
         extra.use_component_scan_index = True
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
         if all_forced:
             return bt, spec, extra
 
@@ -308,7 +421,7 @@ def extract_bt_force_until_forced(
             use_diagonals=spec.use_diagonals,
             wl_rounds=5
         )
-        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, extra)
+        bt, all_forced = check_boundary_forced(train_pairs, spec, delta, writer_mode, tiling_policy, extra)
 
     # Return final result (may still have unforced keys)
     return bt, spec, extra
