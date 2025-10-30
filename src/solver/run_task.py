@@ -6,8 +6,8 @@ from ..types import Task, Grid, ShapeLawKind
 from ..present.pi import canonize_inputs, uncanonize
 from ..qt.spec import build_qt_spec
 from ..solver.shape_law import infer_shape_law
-from ..bt.boundary import extract_bt_force_until_forced
-from ..phi.paint import paint_phi, select_size_writer
+from ..bt.boundary import extract_bt_force_until_forced, probe_writer_mode
+from ..phi.paint import paint_phi
 from ..kernel.grid import d8_apply
 
 
@@ -51,31 +51,27 @@ def solve_task(
     # Step 3: QtSpec from canonized train inputs (content-blind, input-only)
     spec0 = build_qt_spec(c_train.grids)
 
-    # Step 4: Bt via ladder (force-until-forced, keys by bytes)
-    # Pair canonized inputs with canonized outputs (same transform as input)
+    # Step 3.5: Probe write-law for size-change tasks (BEFORE Bt)
+    # Canonize outputs with same D8 as inputs
     canon_train_pairs = [
         (cx, d8_apply(y, meta.transform_id))
         for cx, meta, (_, y) in zip(c_train.grids, c_train.metas, task.train)
     ]
-    bt, specF, extraF = extract_bt_force_until_forced(canon_train_pairs, spec0)
+    writer_mode = probe_writer_mode(canon_train_pairs, delta)
 
-    # Step 4.5: Select write-law for size-change tasks
-    # Test both writers on training and pick the one that matches
-    writer_mode = 'identity'
-    if delta.kind == ShapeLawKind.BLOW_UP and (delta.kh > 1 or delta.kw > 1):
-        writer_mode = select_size_writer(
-            canon_train_pairs,
-            c_train.metas,
-            specF,
-            bt,
-            delta
-        )
+    # Step 4: Bt via ladder (force-until-forced, Δ-aware pullback)
+    bt, specF, extraF = extract_bt_force_until_forced(
+        canon_train_pairs,
+        spec0,
+        delta,
+        writer_mode
+    )
 
     # Step 5: Φ on canonized tests (Δ-aware, guards)
     # Canonize test inputs independently
     c_test = canonize_inputs(task.test)
 
-    # Paint each canonized test input
+    # Paint each canonized test input using determined writer_mode
     outs_canon = []
     for cx in c_test.grids:
         out_canon = paint_phi(

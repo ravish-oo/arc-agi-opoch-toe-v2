@@ -23,7 +23,7 @@ from src.solver.run_task import solve_task
 from src.solver.shape_law import infer_shape_law
 from src.present.pi import canonize_inputs, uncanonize
 from src.qt.spec import build_qt_spec
-from src.bt.boundary import extract_bt_force_until_forced
+from src.bt.boundary import extract_bt_force_until_forced, probe_writer_mode
 from src.phi.paint import paint_phi
 from src.kernel.grid import d8_apply
 
@@ -178,8 +178,12 @@ def diagnostic(task_id: str):
         print(f"\nTrain Y{i} (canonized with transform_id={meta.transform_id}):")
         print_grid(cy, "  Canonized output")
 
+    print("\nProbing write-law (blowup vs tiling)...")
+    writer_mode = probe_writer_mode(canon_train_pairs, delta)
+    print(f"  Writer mode: {writer_mode}")
+
     print("\nRunning ladder refinement (force-until-forced)...")
-    bt, specF, extraF = extract_bt_force_until_forced(canon_train_pairs, spec0)
+    bt, specF, extraF = extract_bt_force_until_forced(canon_train_pairs, spec0, delta, writer_mode)
 
     print(f"\nFinal Bt (Boundary):")
     print(f"  Forced colors: {len(bt.forced_color)} class signatures")
