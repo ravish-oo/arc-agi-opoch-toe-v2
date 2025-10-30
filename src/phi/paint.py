@@ -1,9 +1,97 @@
 # src/phi/paint.py
-from typing import Dict
+from typing import Dict, List, Tuple
 import numpy as np
 
-from ..types import Grid, Boundary, QtSpec, ShapeLaw, ShapeLawKind
+from ..types import Grid, Boundary, QtSpec, ShapeLaw, ShapeLawKind, CanonMeta
 from ..qt.quotient import classes_for
+from ..present.pi import uncanonize
+
+
+def select_size_writer(
+    canon_train_pairs: List[Tuple[Grid, Grid]],  # (X_canon, Y_canon)
+    metas_train: List[CanonMeta],
+    spec: QtSpec,
+    bt: Boundary,
+    delta: ShapeLaw
+) -> str:
+    """
+    Return 'blowup' or 'tiling' for kh×kw size-change tasks.
+
+    Deterministic: evaluate both writers on train inputs and compare to train outputs.
+    No changes to Qt or Δ. Uses Y only to decide which Φ law reproduces the training.
+
+    Algorithm:
+    1. For each train pair, compute predictions with both writers
+    2. Un-canonize predictions and compare to actual train outputs
+    3. Count mismatches for each writer
+    4. Pick writer with fewer errors (tie-break: 'blowup')
+    """
+    if delta.kind != ShapeLawKind.BLOW_UP:
+        return 'identity'
+
+    if delta.kh == 1 and delta.kw == 1:
+        return 'identity'
+
+    kh, kw = delta.kh, delta.kw
+    err_bu = 0  # blow-up errors
+    err_ti = 0  # tiling errors
+
+    for (cx, cy_canon), meta in zip(canon_train_pairs, metas_train):
+        # Compute both predictions on canonized input
+        pred_bu_canon = _paint_blowup_internal(cx, spec, bt, kh, kw)
+        pred_ti_canon = _paint_tiling_internal(cx, spec, bt, kh, kw)
+
+        # Un-canonize predictions to match original train output
+        pred_bu = uncanonize(pred_bu_canon, meta)
+        pred_ti = uncanonize(pred_ti_canon, meta)
+
+        # Un-canonize the canonized train output to get original Y
+        y_orig = uncanonize(cy_canon, meta)
+
+        # Count mismatches
+        err_bu += np.sum(pred_bu != y_orig)
+        err_ti += np.sum(pred_ti != y_orig)
+
+    # Decision logic
+    if err_ti == 0 and err_bu > 0:
+        return 'tiling'
+    elif err_bu == 0 and err_ti > 0:
+        return 'blowup'
+    elif err_ti < err_bu:
+        return 'tiling'
+    else:
+        # Tie-break: prefer blowup (stable default)
+        return 'blowup'
+
+
+def _build_color_map(x: Grid, cls, bt: Boundary) -> Dict[int, np.int8]:
+    """
+    Build per-local-id color map with identity-guard.
+
+    For each class:
+    - If key in Bt.forced_color: use that
+    - Else: use input color at first pixel of that class (identity-guard)
+    """
+    col_of_local: Dict[int, np.int8] = {}
+
+    for local_id, key in cls.key_for.items():
+        if key in bt.forced_color:
+            # Use forced color from Bt
+            v = bt.forced_color[key]
+        else:
+            # Bt-empty guard: use input color (input-only fallback)
+            # Find first pixel with this local_id
+            positions = np.argwhere(cls.ids == local_id)
+            if len(positions) > 0:
+                r0, c0 = positions[0]
+                v = int(x[r0, c0])
+            else:
+                # Shouldn't happen (class exists in key_for), but guard anyway
+                v = 0
+
+        col_of_local[local_id] = np.int8(v)
+
+    return col_of_local
 
 
 def paint_phi(
@@ -37,24 +125,7 @@ def paint_phi(
     cls = classes_for(x, spec)
 
     # Step 2: Build per-local-id color map with guards
-    col_of_local: Dict[int, np.int8] = {}
-
-    for local_id, key in cls.key_for.items():
-        if key in bt.forced_color:
-            # Use forced color from Bt
-            v = bt.forced_color[key]
-        else:
-            # Bt-empty guard: use input color (input-only fallback)
-            # Find first pixel with this local_id
-            positions = np.argwhere(cls.ids == local_id)
-            if len(positions) > 0:
-                r0, c0 = positions[0]
-                v = int(x[r0, c0])
-            else:
-                # Shouldn't happen (class exists in key_for), but guard anyway
-                v = 0
-
-        col_of_local[local_id] = np.int8(v)
+    col_of_local = _build_color_map(x, cls, bt)
 
     # Step 3: Paint based on Δ
     if delta.kind == ShapeLawKind.IDENTITY:
@@ -67,7 +138,7 @@ def paint_phi(
         return _paint_frame(x, cls, col_of_local, delta.kh)  # t stored in kh
 
     elif delta.kind == ShapeLawKind.TILING and enable_tiling:
-        return _paint_tiling(x, cls, col_of_local, delta.kh, delta.kw)
+        return _paint_tiling(x, cls, col_of_local, bt, delta.kh, delta.kw)
 
     else:
         # Fallback to identity if flags not enabled
@@ -85,6 +156,13 @@ def _paint_identity(x: Grid, cls, col_of_local: Dict[int, np.int8]) -> Grid:
         out[mask] = v
 
     return np.ascontiguousarray(out)
+
+
+def _paint_blowup_internal(x: Grid, spec: QtSpec, bt: Boundary, kh: int, kw: int) -> Grid:
+    """Internal: Paint BLOW_UP case with full setup."""
+    cls = classes_for(x, spec)
+    col_of_local = _build_color_map(x, cls, bt)
+    return _paint_blowup(x, cls, col_of_local, kh, kw)
 
 
 def _paint_blowup(x: Grid, cls, col_of_local: Dict[int, np.int8], kh: int, kw: int) -> Grid:
@@ -138,18 +216,55 @@ def _paint_frame(x: Grid, cls, col_of_local: Dict[int, np.int8], t: int) -> Grid
     return np.ascontiguousarray(out)
 
 
-def _paint_tiling(x: Grid, cls, col_of_local: Dict[int, np.int8], kh: int, kw: int) -> Grid:
-    """Paint TILING case: tile identity patch kh×kw times."""
+def _paint_tiling_internal(x: Grid, spec: QtSpec, bt: Boundary, kh: int, kw: int) -> Grid:
+    """Internal: Paint TILING case with full setup."""
+    cls = classes_for(x, spec)
+    col_of_local = _build_color_map(x, cls, bt)
+    return _paint_tiling(x, cls, col_of_local, bt, kh, kw)
+
+
+def _paint_tiling(
+    x: Grid,
+    cls,
+    col_of_local: Dict[int, np.int8],
+    bt: Boundary,
+    kh: int,
+    kw: int
+) -> Grid:
+    """
+    Paint TILING case: selective stamping based on input classes.
+
+    For each pane (pr, pc):
+      - Map to input anchor via modulo: ar = pr % h, ac = pc % w
+      - Derive "used color" same as Φ does: ρ(key) if forced, else input color
+      - Place identity patch Z in pane iff used != 0
+
+    This is input-only + Bt, no target peeking, and handles selective tiling.
+    """
     h, w = x.shape
     H, W = h * kh, w * kw
 
-    # First compute identity patch
+    # Step 1: Build identity patch Z (same rule as IDENTITY: use ρ when present, else input color)
     Z = _paint_identity(x, cls, col_of_local)
 
-    # Tile it
+    # Step 2: Pane mask via modulo anchors and the SAME "used-color" rule
+    mask = np.zeros((kh, kw), dtype=bool)
+    for pr in range(kh):
+        for pc in range(kw):
+            ar, ac = pr % h, pc % w  # Modulo mapping (binding)
+            lid = int(cls.ids[ar, ac])
+            key = cls.key_for[lid]
+            forced = bt.forced_color.get(key, None)
+
+            # Derive the "used color" exactly like Φ would do
+            used = forced if forced is not None else int(x[ar, ac])
+            mask[pr, pc] = (used != 0)  # Selective stamping
+
+    # Step 3: Tile Z selectively
     out = np.zeros((H, W), dtype=np.int8)
-    for i in range(kh):
-        for j in range(kw):
-            out[i*h:(i+1)*h, j*w:(j+1)*w] = Z
+    for pr in range(kh):
+        for pc in range(kw):
+            if mask[pr, pc]:
+                out[pr*h:(pr+1)*h, pc*w:(pc+1)*w] = Z
 
     return np.ascontiguousarray(out)

@@ -2,12 +2,12 @@
 from typing import Dict, List
 import numpy as np
 
-from ..types import Task, Grid
+from ..types import Task, Grid, ShapeLawKind
 from ..present.pi import canonize_inputs, uncanonize
 from ..qt.spec import build_qt_spec
 from ..solver.shape_law import infer_shape_law
 from ..bt.boundary import extract_bt_force_until_forced
-from ..phi.paint import paint_phi
+from ..phi.paint import paint_phi, select_size_writer
 from ..kernel.grid import d8_apply
 
 
@@ -59,6 +59,18 @@ def solve_task(
     ]
     bt, specF, extraF = extract_bt_force_until_forced(canon_train_pairs, spec0)
 
+    # Step 4.5: Select write-law for size-change tasks
+    # Test both writers on training and pick the one that matches
+    writer_mode = 'identity'
+    if delta.kind == ShapeLawKind.BLOW_UP and (delta.kh > 1 or delta.kw > 1):
+        writer_mode = select_size_writer(
+            canon_train_pairs,
+            c_train.metas,
+            specF,
+            bt,
+            delta
+        )
+
     # Step 5: Φ on canonized tests (Δ-aware, guards)
     # Canonize test inputs independently
     c_test = canonize_inputs(task.test)
@@ -72,7 +84,7 @@ def solve_task(
             bt,
             delta,
             enable_frame=enable_frame,
-            enable_tiling=enable_tiling
+            enable_tiling=(writer_mode == 'tiling')
         )
         outs_canon.append(out_canon)
 

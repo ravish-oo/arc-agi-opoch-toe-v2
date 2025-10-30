@@ -158,7 +158,7 @@ def infer_shape_law(
         # Check if TILING should be considered
         tiling_selected = False
         if enable_tiling and periodicity_check:
-            # Check strong periodicity on all train inputs
+            # Strict check: require periodic inputs
             all_periodic = all(
                 _is_strongly_periodic(x)
                 for x, _ in train_pairs
