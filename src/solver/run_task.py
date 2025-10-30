@@ -6,7 +6,7 @@ from ..types import Task, Grid, ShapeLawKind
 from ..present.pi import canonize_inputs, uncanonize
 from ..qt.spec import build_qt_spec
 from ..solver.shape_law import infer_shape_law
-from ..bt.boundary import extract_bt_force_until_forced, probe_writer_mode, select_tiling_policy
+from ..bt.boundary import extract_bt_force_until_forced, probe_writer_mode
 from ..phi.paint import paint_phi
 from ..kernel.grid import d8_apply
 
@@ -51,18 +51,20 @@ def solve_task(
     # Step 3: QtSpec from canonized train inputs (content-blind, input-only)
     spec0 = build_qt_spec(c_train.grids)
 
-    # Step 3.5: Probe write-law for size-change tasks (BEFORE Bt)
-    # Canonize outputs with same D8 as inputs
+    # Step 3.5: Canonize outputs with same D8 as inputs
     canon_train_pairs = [
         (cx, d8_apply(y, meta.transform_id))
         for cx, meta, (_, y) in zip(c_train.grids, c_train.metas, task.train)
     ]
-    writer_mode = probe_writer_mode(canon_train_pairs, delta)
 
-    # Step 3.6: Select tiling policy for tiling tasks
-    tiling_policy = 'uniform'
-    if writer_mode == 'tiling':
-        tiling_policy = select_tiling_policy(canon_train_pairs, delta)
+    # Step 3.6: Probe write-law for size-change tasks (BEFORE Bt)
+    kh, kw = (1, 1)
+    if delta.kind == ShapeLawKind.BLOW_UP:
+        kh, kw = delta.kh, delta.kw
+
+    writer_mode, tiling_policy = ('identity', None)
+    if kh > 1 or kw > 1:
+        writer_mode, tiling_policy = probe_writer_mode(canon_train_pairs, kh, kw)
 
     # Step 4: Bt via ladder (force-until-forced, Δ-aware pullback)
     bt, specF, extraF = extract_bt_force_until_forced(
@@ -70,7 +72,7 @@ def solve_task(
         spec0,
         delta,
         writer_mode,
-        tiling_policy
+        tiling_policy if tiling_policy is not None else 'uniform'
     )
 
     # Step 5: Φ on canonized tests (Δ-aware, guards)
@@ -87,7 +89,7 @@ def solve_task(
             delta,
             enable_frame=enable_frame,
             enable_tiling=(writer_mode == 'tiling'),
-            tiling_policy=tiling_policy
+            tiling_policy=tiling_policy if tiling_policy is not None else 'uniform'
         )
         outs_canon.append(out_canon)
 

@@ -60,124 +60,67 @@ def inverse_pane_coords(r: int, c: int, w: int, pr: int, pc: int, policy: str) -
         return r, c
 
 
-def select_tiling_policy(
-    canon_train_pairs: List[Tuple[Grid, Grid]],  # (X_canon, Y_canon)
-    delta: ShapeLaw
-) -> str:
-    """
-    Select tiling policy by testing candidates on training pairs.
-
-    Returns policy ∈ {'uniform', 'row_FH', 'col_FH', 'checker_FH'}
-
-    Deterministic: picks policy with minimum mismatch across all train pairs.
-    """
-    if delta.kind != ShapeLawKind.BLOW_UP:
-        return 'uniform'
-
-    kh, kw = delta.kh, delta.kw
-    policies = ['uniform', 'row_FH', 'col_FH', 'checker_FH']
-    policy_mismatches = {p: 0 for p in policies}
-
-    for cx, cy in canon_train_pairs:
-        h, w = cx.shape
-        H, W = cy.shape
-
-        # Skip if not size-changed
-        if (h, w) == (H, W):
-            continue
-
-        for policy in policies:
-            # Test this policy
-            for pr in range(kh):
-                for pc in range(kw):
-                    pane = cy[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
-
-                    # Apply transform to input
-                    transformed_input = apply_pane_transform(cx, pr, pc, policy)
-
-                    # Check if pane matches transformed input
-                    is_on = np.array_equal(pane, transformed_input)
-                    is_off = np.all(pane == 0)
-
-                    if is_on or is_off:
-                        # Good match, no mismatch
-                        pass
-                    else:
-                        # Count mismatches
-                        if not is_off:
-                            policy_mismatches[policy] += np.sum(pane != transformed_input)
-
-    # Pick policy with minimum mismatch (tie-break: uniform)
-    best_policy = min(policies, key=lambda p: (policy_mismatches[p], policies.index(p)))
-    return best_policy
 
 
 def probe_writer_mode(
     canon_train_pairs: List[Tuple[Grid, Grid]],  # (X_canon, Y_canon)
-    delta: ShapeLaw
-) -> str:
+    kh: int,
+    kw: int,
+    policies: Tuple[str, ...] = ("uniform", "row_FH", "col_FH", "checker_FH")
+) -> Tuple[str, str | None]:
     """
-    Deterministic writer probe: decide 'blowup' vs 'tiling' for size-changed tasks.
+    Return (writer_mode, tiling_policy_or_None).
 
-    Checks training outputs:
+    Deterministically tests blow-up vs tiling(+policy) on TRAIN PAIRS ONLY.
+    Uses apply_pane_transform for motif transforms.
+
     - BLOW_UP: each kh×kw block is constant color
-    - TILING: each h×w pane is either all zeros or equals X
+    - TILING: each h×w pane equals transformed input or is all zeros
 
-    Returns 'blowup', 'tiling', or 'identity'
+    Returns:
+        ('blowup', None) or ('tiling', policy_string)
     """
-    if delta.kind != ShapeLawKind.BLOW_UP:
-        return 'identity'
+    if not canon_train_pairs:
+        return ('identity', None)
 
-    if delta.kh == 1 and delta.kw == 1:
-        return 'identity'
+    h, w = canon_train_pairs[0][0].shape
+    H, W = canon_train_pairs[0][1].shape
 
-    kh, kw = delta.kh, delta.kw
+    # Skip if not size-changed
+    if (h, w) == (H, W):
+        return ('identity', None)
 
-    blowup_votes = 0
-    tiling_votes = 0
+    if kh == 1 and kw == 1:
+        return ('identity', None)
 
-    for cx, cy in canon_train_pairs:
-        h, w = cx.shape
-        H, W = cy.shape
+    # 1) Blow-up error: sum of non-constant kh×kw blocks
+    err_bu = 0
+    for X_c, Y_c in canon_train_pairs:
+        for R in range(0, H, kh):
+            for C in range(0, W, kw):
+                block = Y_c[R:R+kh, C:C+kw]
+                if not (block == block[0, 0]).all():
+                    err_bu += int(np.count_nonzero(block != block[0, 0]))
 
-        # Skip if not size-changed
-        if (h, w) == (H, W):
-            continue
+    # 2) Tiling error per policy: ON if pane == T(X_c); OFF if pane==0; otherwise penalize pixel diffs
+    err_ti = {p: 0 for p in policies}
+    for policy in policies:
+        total = 0
+        for X_c, Y_c in canon_train_pairs:
+            for pr in range(kh):
+                for pc in range(kw):
+                    pane = Y_c[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
+                    motif = apply_pane_transform(X_c, pr, pc, policy)
+                    if (pane == motif).all() or (pane == 0).all():
+                        continue
+                    total += int(np.count_nonzero(pane != motif))
+        err_ti[policy] = total
 
-        # Check BLOW_UP: all kh×kw blocks constant?
-        all_blocks_constant = True
-        for pr in range(h):
-            for pc in range(w):
-                block = cy[pr*kh:(pr+1)*kh, pc*kw:(pc+1)*kw]
-                if len(np.unique(block)) > 1:
-                    all_blocks_constant = False
-                    break
-            if not all_blocks_constant:
-                break
-
-        # Check TILING: h×w panes are zeros or equal to X?
-        all_panes_valid = True
-        for pr in range(kh):
-            for pc in range(kw):
-                pane = cy[pr*h:(pr+1)*h, pc*w:(pc+1)*w]
-                is_zero = np.all(pane == 0)
-                is_input = np.array_equal(pane, cx)
-                if not (is_zero or is_input):
-                    all_panes_valid = False
-                    break
-            if not all_panes_valid:
-                break
-
-        if all_blocks_constant:
-            blowup_votes += 1
-        if all_panes_valid:
-            tiling_votes += 1
-
-    # Decision: majority vote, tie-break 'blowup'
-    if tiling_votes > blowup_votes:
-        return 'tiling'
-    else:
-        return 'blowup'
+    # 3) Decide writer + policy (deterministic tie-break)
+    best_policy, best_err_ti = min(err_ti.items(), key=lambda kv: (kv[1], kv[0]))
+    if best_err_ti < err_bu:
+        return ('tiling', best_policy)
+    return ('blowup', None)
 
 
 def check_boundary_forced(

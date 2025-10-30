@@ -23,7 +23,7 @@ from src.solver.run_task import solve_task
 from src.solver.shape_law import infer_shape_law
 from src.present.pi import canonize_inputs, uncanonize
 from src.qt.spec import build_qt_spec
-from src.bt.boundary import extract_bt_force_until_forced, probe_writer_mode, select_tiling_policy
+from src.bt.boundary import extract_bt_force_until_forced, probe_writer_mode
 from src.phi.paint import paint_phi
 from src.kernel.grid import d8_apply
 
@@ -178,20 +178,26 @@ def diagnostic(task_id: str):
         print(f"\nTrain Y{i} (canonized with transform_id={meta.transform_id}):")
         print_grid(cy, "  Canonized output")
 
-    print("\nProbing write-law (blowup vs tiling)...")
-    writer_mode = probe_writer_mode(canon_train_pairs, delta)
-    print(f"  Writer mode: {writer_mode}")
+    print("\nProbing write-law (blowup vs tiling with policy)...")
+    kh, kw = (1, 1)
+    if delta.kind.name == 'BLOW_UP':
+        kh, kw = delta.kh, delta.kw
 
-    print("\nSelecting tiling policy...")
-    tiling_policy = 'uniform'
-    if writer_mode == 'tiling':
-        tiling_policy = select_tiling_policy(canon_train_pairs, delta)
-        print(f"  Tiling policy: {tiling_policy}")
-    else:
-        print(f"  Tiling policy: {tiling_policy} (default, not tiling mode)")
+    writer_mode, tiling_policy = ('identity', None)
+    if kh > 1 or kw > 1:
+        writer_mode, tiling_policy = probe_writer_mode(canon_train_pairs, kh, kw)
+
+    print(f"  Writer mode: {writer_mode}")
+    print(f"  Tiling policy: {tiling_policy if tiling_policy is not None else 'N/A'}")
 
     print("\nRunning ladder refinement (force-until-forced)...")
-    bt, specF, extraF = extract_bt_force_until_forced(canon_train_pairs, spec0, delta, writer_mode, tiling_policy)
+    bt, specF, extraF = extract_bt_force_until_forced(
+        canon_train_pairs,
+        spec0,
+        delta,
+        writer_mode,
+        tiling_policy if tiling_policy is not None else 'uniform'
+    )
 
     print(f"\nFinal Bt (Boundary):")
     print(f"  Forced colors: {len(bt.forced_color)} class signatures")
@@ -222,7 +228,14 @@ def diagnostic(task_id: str):
     outs_canon = []
     for i, cx in enumerate(c_test.grids):
         print(f"\nPainting test {i}...")
-        out_canon = paint_phi(cx, specF, bt, delta, enable_tiling=(writer_mode == 'tiling'), tiling_policy=tiling_policy)
+        out_canon = paint_phi(
+            cx,
+            specF,
+            bt,
+            delta,
+            enable_tiling=(writer_mode == 'tiling'),
+            tiling_policy=tiling_policy if tiling_policy is not None else 'uniform'
+        )
         outs_canon.append(out_canon)
         print_grid(out_canon, f"  Painted output (canonized)")
 
