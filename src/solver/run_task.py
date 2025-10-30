@@ -3,7 +3,7 @@ from typing import Dict, List
 import numpy as np
 
 from ..types import Task, Grid, ShapeLawKind
-from ..present.pi import canonize_inputs, uncanonize
+from ..present.pi import canonize_task, uncanonize
 from ..qt.spec import build_qt_spec
 from ..solver.shape_law import infer_shape_law
 from ..bt.boundary import extract_bt_force_until_forced, probe_writer_mode
@@ -44,9 +44,9 @@ def solve_task(
         periodicity_check=periodicity_check
     )
 
-    # Step 2: Π on train inputs (inputs-only canonization)
+    # Step 2: Π task-level (train+test with single union order)
     train_Xs = [x for x, _ in task.train]
-    c_train = canonize_inputs(train_Xs)
+    c_train, c_test, union_order = canonize_task(train_Xs, task.test)
 
     # Step 3: QtSpec from canonized train inputs (content-blind, input-only)
     spec0 = build_qt_spec(c_train.grids)
@@ -76,8 +76,7 @@ def solve_task(
     )
 
     # Step 5: Φ on canonized tests (Δ-aware, guards)
-    # Canonize test inputs independently
-    c_test = canonize_inputs(task.test)
+    # Test inputs already canonized in Step 2 with same union order as train
 
     # Paint each canonized test input using determined writer_mode
     outs_canon = []

@@ -21,7 +21,7 @@ sys.path.insert(0, str(repo_root))
 from src.types import Task, Grid, ShapeLaw, ShapeLawKind
 from src.solver.run_task import solve_task
 from src.solver.shape_law import infer_shape_law
-from src.present.pi import canonize_inputs, uncanonize
+from src.present.pi import canonize_task, uncanonize
 from src.qt.spec import build_qt_spec
 from src.bt.boundary import extract_bt_force_until_forced, probe_writer_mode
 from src.phi.paint import paint_phi
@@ -134,12 +134,12 @@ def diagnostic(task_id: str):
     print("  TILING(kh,kw): same as BLOW_UP but inputs are periodic")
 
     # ========== STEP 2: Π (Canonization) ==========
-    print_section("STEP 2: Π (Canonize Train Inputs)")
+    print_section("STEP 2: Π (Task-level Canonization)")
 
     train_Xs = [x for x, _ in task.train]
-    c_train = canonize_inputs(train_Xs)
+    c_train, c_test, union_order = canonize_task(train_Xs, task.test)
 
-    print(f"\nCanonized train inputs (pose-normalized):")
+    print(f"\nCanonized train inputs (pose-normalized with task-level union order):")
     for i, (cx, meta) in enumerate(zip(c_train.grids, c_train.metas)):
         print(f"\nTrain X{i} (canonized):")
         print(f"  Transform ID: {meta.transform_id} (D8 action)")
@@ -147,7 +147,8 @@ def diagnostic(task_id: str):
         print_grid(cx, f"  Canonized grid")
 
     print("\n[HAND-SOLVE CHECK]")
-    print("  Canonization applies D8 transformation to normalize pose")
+    print("  Task-level canonization: compute single union order from train+test inputs")
+    print("  This ensures D8 tie-breaks are consistent across train and test")
     print("  D8 = {e, r90, r180, r270, fh, fv, fd, fa} (8 symmetries)")
     print("  Also does rank-view palette normalization (not shown here)")
 
@@ -216,9 +217,7 @@ def diagnostic(task_id: str):
     # ========== STEP 5: Φ (Paint Test) ==========
     print_section("STEP 5: Φ (Paint Test Outputs)")
 
-    c_test = canonize_inputs(task.test)
-
-    print(f"\nCanonized test inputs:")
+    print(f"\nCanonized test inputs (using same union order from Step 2):")
     for i, (cx, meta) in enumerate(zip(c_test.grids, c_test.metas)):
         print(f"\nTest {i} (canonized):")
         print(f"  Transform ID: {meta.transform_id}")

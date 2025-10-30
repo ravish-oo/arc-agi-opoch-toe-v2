@@ -155,6 +155,48 @@ def canonize_inputs(xs: List[Grid]) -> Canonized:
     return Canonized(grids=grids, metas=metas)
 
 
+def compute_union_order(train_xs: List[Grid], test_xs: List[Grid]) -> np.ndarray:
+    """
+    Inputs-only: sum color counts across all grids (train+test) to build a single union palette order.
+    Deterministic for the same multiset of inputs.
+    Returns np.ndarray of int, shape (10,).
+    """
+    U = np.zeros(10, dtype=np.int64)
+    for x in train_xs:
+        U += color_counts(x)
+    for x in test_xs:
+        U += color_counts(x)
+    return rank_order_from_counts(U)
+
+
+def canonize_with_union(xs: List[Grid], union_order: np.ndarray) -> Canonized:
+    """
+    Canonize a list of grids using a precomputed union palette order (inputs-only).
+    Returns Canonized(grids, metas).
+    """
+    grids = []
+    metas = []
+    for x in xs:
+        cx, meta = canon_one_with_union(x, union_order)
+        grids.append(cx)
+        metas.append(meta)
+    return Canonized(grids=grids, metas=metas)
+
+
+def canonize_task(train_xs: List[Grid], test_xs: List[Grid]) -> Tuple[Canonized, Canonized, np.ndarray]:
+    """
+    Task-level Π: compute a single union order over train+test inputs and canonize both sets with it.
+    Returns (c_train, c_test, union_order).
+
+    This ensures train and test use the same union palette order, so D8 tie-breaks are consistent
+    and class keys learned on train apply to test.
+    """
+    union_order = compute_union_order(train_xs, test_xs)
+    c_train = canonize_with_union(train_xs, union_order)
+    c_test = canonize_with_union(test_xs, union_order)
+    return c_train, c_test, union_order
+
+
 def uncanonize(g: Grid, meta: CanonMeta) -> Grid:
     """
     Invert canonization: apply inverse D8 transform to restore original pose.
